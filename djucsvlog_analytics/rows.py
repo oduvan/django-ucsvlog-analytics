@@ -34,7 +34,7 @@ class Row(object):
         
         for prop_name,prop_val in zip(list_settings_names(LS.LOG_BASE),self.raw_base):
             setattr(self,'base_'+prop_name,prop_val)
-        
+
         self.log_name = self.raw[len(self.raw_base) + 2]
         
         self.is_a_log = self.log_name == 'a_log'

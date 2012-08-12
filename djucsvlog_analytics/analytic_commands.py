@@ -1,21 +1,11 @@
-from datetime import datetime, timedelta
+from datetime import datetime
 from optparse import make_option
-
-from django.core.management.base import BaseCommand, CommandError
-from django.core.urlresolvers import resolve, Resolver404
-
-
-from djucsvlog import settings as LS
+from django.core.management.base import BaseCommand
 import djucsvlog_analytics.settings as S
-
 import os
-import json
 import codecs
 import sqlite3
-import time
-
 from djucsvlog_analytics.readers import BaseStreamReader, BaseCollectReader
-
 
 
 class BaseSimpleAnalyticCommand(BaseCommand):
@@ -24,37 +14,44 @@ class BaseSimpleAnalyticCommand(BaseCommand):
     cls_reader = BaseCollectReader
     
     option_list = BaseCommand.option_list + (
-        make_option('--from',
+        make_option(
+            '--from',
             dest='from_datetime',
             default=None,
-            help='From Datetime'),
-        make_option('--to',
+            help='From Datetime'
+        ),
+        make_option(
+            '--to',
             dest='to_datetime',
             default=None,
-            help='To Datetime'),
-        
-        )
-    def initial_options(self,options):
-        self.max_datetime = self.from_datetime = datetime.strptime(options['from_datetime'],'%Y-%m-%dT%H:%M:%S') if options['from_datetime'] else datetime(1, 1, 1, 0, 0)
-        self.min_datetime = self.to_datetime = datetime.strptime(options['to_datetime'],'%Y-%m-%dT%H:%M:%S') if options['to_datetime'] else datetime.now()
+            help='To Datetime'
+        ),
+    )
 
-    def filter_row(self,row):
+    def initial_options(self, options):
+        convert_datetime_str = lambda s: datetime.strptime(s, '%Y-%m-%dT%H:%M:%S')
+        from_datetime = (
+            convert_datetime_str(options['from_datetime'])
+            if options['from_datetime']
+            else datetime(1, 1, 1, 0, 0)
+        )
+        self.max_datetime = self.from_datetime = from_datetime
+        to_datetime = (
+            convert_datetime_str(options['to_datetime'])
+            if options['to_datetime']
+            else datetime.now()
+        )
+        self.min_datetime = self.to_datetime = to_datetime
+
+    def filter_row(self, row):
         return self.from_datetime < row.index_datetime < self.to_datetime 
     
-    def collect_row(self,row):
-        if row.index_datetime > self.max_datetime:
-            self.max_datetime = row.index_datetime
-        
-        if row.index_datetime < self.min_datetime:
-            self.min_datetime = row.index_datetime
-        
-        if row.index_datetime > self.cur_max_datetime:
-            self.cur_max_datetime = row.index_datetime
-        
-        if row.index_datetime < self.cur_min_datetime:
-            self.cur_min_datetime = row.index_datetime
+    def collect_row(self, row):
+        cur_datetime = row.index_datetime
+        self.min_datetime = min(cur_datetime, self.min_datetime)
+        self.max_datetime = max(cur_datetime, self.max_datetime)
     
-    def handle_file(self,file_name):
+    def handle_file(self, file_name):
         anal = self.cls_reader(file_name)
         anal.set_command(self)
         anal.import_all()
@@ -337,52 +334,35 @@ class BaseAnalyticReadCommand(BaseCommand):
             item.command_analyse(self)
         
 
+
         
 
-class BaseStreamCommand(BaseCommand):
+class BaseSimpleStreamCommand(BaseCommand):
     cls_reader = BaseStreamReader
     collected_rows = 0
-    
-    def get_stream_index(self):
-        return S.STREAM_INDEX
-    
-    def handle(self, *args, **options):
+
+    def __init__(self,*args,**kwargs):
+        super(BaseSimpleStreamCommand,self).__init__(*args,**kwargs)
         self.i = {}
         self.streams = []
         self.readers = []
-        if not os.path.exists(self.get_stream_index()):
-            self.create_stream_index()
-        else:
-            self.init_stream_index()
-        for folder, matches in S.STREAM_FOLDERS_MATCHES_RE.items():
-            self.read_stream_folder(folder, matches)
+    
+    def handle(self, *args, **options):
+
+        self.init_options(*args, **options)
+
+        self.collect_streams()
+
         if not self.streams:
             return
         
         self.handle_streams()
-        
-        for item in self.readers:
-            self.db_update_file(item)
+
             
         self.clear_too_old_data()
         self.update_collected_info()
-        self.c.commit()
     
-    def init_stream_index(self):
-        self.c = sqlite3.connect(self.get_stream_index())
-        self.c.row_factory = sqlite3.Row
-    
-    def create_stream_index(self):
-        self.init_stream_index()
-        cur = self.c.cursor()
-        cur.execute('''
-            create table if not exists "file" (
-                id integer primary key autoincrement,
-                "name" text UNIQUE,
-                "last_read_position" int,
-                "last_size" int
-            )
-        ''')
+
     
     def read_stream_folder(self, folder, matches):
         for item in os.listdir(folder):
@@ -396,17 +376,9 @@ class BaseStreamCommand(BaseCommand):
             if re_filename.match(filename):
                 return True
         return False
-    
+
     def get_analyse_position(self,filename):
-        cur = self.c.cursor()
-        cur.execute('select * from "file" where "name"=?',[filename])
-        db_info = cur.fetchone()
-        if db_info is None:
-            cur.execute('insert into "file"("name","last_read_position", "last_size") values (?,0,0)', [filename])
-            return 0 #read from begining
-        if db_info['last_size'] < os.path.getsize(filename):
-            return db_info['last_read_position'] # read from last position
-        return None # no need to read
+        return 0
         
     
     def add_stream_reader(self, filename):
@@ -416,13 +388,8 @@ class BaseStreamCommand(BaseCommand):
         reader = self.cls_reader(filename,seek=read_position)
         self.readers.append(reader)
         self.streams.append( reader.all_records())
-        #self.db_update_file(filename, anal) 
     
-    def db_update_file(self,reader):
-        filename = reader.filename
-        cur = self.c.cursor()
-        cur.execute('update "file" set "last_read_position"=?, "last_size"=? where "name"=?',\
-                                        [reader.tell(), os.path.getsize(filename),filename])
+
 
     def handle_streams(self):
         streams = []
@@ -435,6 +402,8 @@ class BaseStreamCommand(BaseCommand):
             streams.append(stream)
             
         last_rows_index = map(lambda row: row.index_datetime, last_rows)
+        if not last_rows_index:
+            return
         while True:
             row_index = last_rows_index.index(min(last_rows_index))
             row = last_rows[row_index]
@@ -463,7 +432,7 @@ class BaseStreamCommand(BaseCommand):
         
     
     def filter_row(self,row):
-        return False
+        return True
     
     def collect_row(self,row):
         pass
@@ -474,6 +443,78 @@ class BaseStreamCommand(BaseCommand):
     def clear_too_old_data(self):
         pass
 
+    def collect_streams(self):
+        pass
+
+    def init_options(self,*args,**kwargs):
+        pass
+
+
+class BaseFileStreamCommand(BaseSimpleStreamCommand):
+    def init_options(self,*args,**kwargs):
+        self.files = args
+    def collect_streams(self):
+        for filename in self.files:
+            self.add_stream_reader(filename)
+
+class BaseStreamCommand(BaseSimpleStreamCommand):
+
+    def get_stream_index(self):
+        return S.STREAM_INDEX
+
+    def handle(self, *args, **options):
+        if not os.path.exists(self.get_stream_index()):
+            self.create_stream_index()
+        else:
+            self.init_stream_index()
+
+
+        super(BaseStreamCommand,self).handle(*args, **options)
+
+        for item in self.readers:
+            self.db_update_file(item)
+
+        self.c.commit()
+
+
+    def init_stream_index(self):
+        self.c = sqlite3.connect(self.get_stream_index())
+        self.c.row_factory = sqlite3.Row
+
+    def create_stream_index(self):
+        self.init_stream_index()
+        cur = self.c.cursor()
+        cur.execute('''
+            create table if not exists "file" (
+                id integer primary key autoincrement,
+                "name" text UNIQUE,
+                "last_read_position" int,
+                "last_size" int
+            )
+        ''')
+
+    def get_analyse_position(self,filename):
+        cur = self.c.cursor()
+        cur.execute('select * from "file" where "name"=?',[filename])
+        db_info = cur.fetchone()
+        if db_info is None:
+            cur.execute('insert into "file"("name","last_read_position", "last_size") values (?,0,0)', [filename])
+            return 0 #read from begining
+        if db_info['last_size'] < os.path.getsize(filename):
+            return db_info['last_read_position'] # read from last position
+        return None # no need to read
+
+    def db_update_file(self,reader):
+        filename = reader.filename
+        cur = self.c.cursor()
+        cur.execute('update "file" set "last_read_position"=?, "last_size"=? where "name"=?',\
+            [reader.tell(), os.path.getsize(filename),filename])
+
+    def collect_streams(self):
+        for folder, matches in S.STREAM_FOLDERS_MATCHES_RE.items():
+            self.read_stream_folder(folder, matches)
+
+
 class BaseStreamBlockCommand(BaseStreamCommand):
     def __init__(self,*args,**kwargs):
         super(BaseStreamBlockCommand,self).__init__(*args,**kwargs)
@@ -481,15 +522,18 @@ class BaseStreamBlockCommand(BaseStreamCommand):
         self.lost_rows = 0
     
     def collect_row(self,row):
-        if row.is_a_log:
-            self.a_rows[row.index] = row
-            return
-        else:
+        #import ipdb; ipdb.set_trace();
+        if row.parent_index:
             if row.parent_index in self.a_rows:
-                self.a_rows[row.parent_index].add_children(row)
+                self.a_rows[row.parent_index].add_child(row)
             else:
                 self.lost_rows += 1
                 return
+
+        if row.is_a_log:
+            self.a_rows[row.index] = row
+            return
+
         
         if row.is_c_req:
             complete_block  = self.a_rows[row.parent_index]
@@ -497,7 +541,10 @@ class BaseStreamBlockCommand(BaseStreamCommand):
             self.collect_block(complete_block)
     
     def remove_children(self,row):
-        del self.a_rows[row.index]
+        try:
+            del self.a_rows[row.index]
+        except KeyError:
+            return
         for item in row.children:
             if item.is_a_log:
                 self.remove_children(item)
