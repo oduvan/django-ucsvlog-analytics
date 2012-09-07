@@ -10,12 +10,17 @@ import os
 
 
 class BaseConvertBlockCommand(BaseStreamCommand):
+    '''
+        uses to convert logs from one format to another.
+        Very useful for periodical logs conversion in order to remove  outdated or unnecessary information from them.
+    '''
     def get_stream_index(self):
         return S.CONVERT_INDEX
     def __init__(self,*args,**kwargs):
         super(BaseConvertBlockCommand,self).__init__(*args,**kwargs)
         self.a_indexes = {}
         self.log_fh = {}
+
     def get_analyse_position(self,filename):
         dt_file = datetime.fromtimestamp(os.path.getmtime(filename))
         if dt_file + S.CONVERT_OLD_TIME < datetime.now():
@@ -42,8 +47,6 @@ class BaseConvertBlockCommand(BaseStreamCommand):
             first_parent_index = self.get_first_parent_index(converted_data[1])
         else:
             first_parent_index = converted_data[0]
-            
-        
         
         log_filename = self.get_log_filename(parse_index_field(first_parent_index), row = row)
         
@@ -77,9 +80,6 @@ class BaseConvertBlockCommand(BaseStreamCommand):
     
     def get_log_filename(self,now, row):
         return S.CONVERT_FILE % self.get_log_filename_replace_dict(now, row)
-    
-        
-    
             
     def convert_row(self,row):
         if row.is_a_req:
@@ -117,6 +117,3 @@ class BaseConvertBlockCommand(BaseStreamCommand):
     
     def filter_convert_row(self,row):
         return False
-    
-        
-    

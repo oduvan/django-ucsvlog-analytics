@@ -9,6 +9,10 @@ from djucsvlog_analytics.readers import BaseStreamReader, BaseCollectReader
 
 
 class BaseSimpleAnalyticCommand(BaseCommand):
+    '''
+
+        The most base class to analyse ucsvlog files one by one, row by row.
+    '''
     args = '<logfile1 logfile2 ...>'
     
     cls_reader = BaseCollectReader
@@ -44,9 +48,17 @@ class BaseSimpleAnalyticCommand(BaseCommand):
         self.min_datetime = self.to_datetime = to_datetime
 
     def filter_row(self, row):
+        '''
+            returns False if you don't want to analyse this row
+            Can be overridden.
+        '''
         return self.from_datetime < row.index_datetime < self.to_datetime 
     
     def collect_row(self, row):
+        '''
+            Analyses row.
+            Can be overridden.
+        '''
         cur_datetime = row.index_datetime
         self.min_datetime = min(cur_datetime, self.min_datetime)
         self.max_datetime = max(cur_datetime, self.max_datetime)
@@ -63,7 +75,9 @@ class BaseSimpleAnalyticCommand(BaseCommand):
         self.output_results()
     
     def output_results(self):
-        pass
+        '''
+        Must be overridden to show all analysed data after all files were read
+        '''
         
 
 class GeoIPDB(object):
@@ -110,7 +124,9 @@ class GeoIPDB(object):
 
 
 class BaseAnalyticCommand(BaseSimpleAnalyticCommand):
-    
+    '''
+    Same as BaseSimpleAnalyticCommand, but also uses SQLite Database to collect analysed data in it.
+    '''
     option_list = BaseSimpleAnalyticCommand.option_list + (
         make_option('--out',
             dest='out_file',
@@ -176,7 +192,8 @@ class BaseAnalyticCommand(BaseSimpleAnalyticCommand):
     
     def add_file(self,name, from_datetime, to_datetime):
         cur = self.c.cursor()
-        cur.execute('insert into "file" (name,from_datetime,to_datetime) values(?,?,?)' , (name, from_datetime.isoformat(), to_datetime.isoformat()))
+        cur.execute('insert into "file" (name,from_datetime,to_datetime) values(?,?,?)' ,
+            (name, from_datetime.isoformat(), to_datetime.isoformat()))
     
     def set_cur_file(self,file_name):
         self.cur_file = os.path.abspath(file_name)
@@ -204,6 +221,10 @@ class BaseAnalyticCommand(BaseSimpleAnalyticCommand):
         self.c.commit()
 
 class BaseAnalyticElement(object):
+    '''
+    Base element to use in analysis of the converted DB.
+    '''
+
     result = None
 
     def command_analyse(self,command):
@@ -240,7 +261,9 @@ class BaseAnalyticElement(object):
 
 
 class BaseAnalyticReadCommand(BaseCommand):
-    
+    '''
+        Base command which uses converted DB and AnalyticElements to get converted and analysed data.
+    '''
     option_list = BaseCommand.option_list + (
         make_option('--ipy',
             dest='ipy',
@@ -451,6 +474,9 @@ class BaseSimpleStreamCommand(BaseCommand):
 
 
 class BaseFileStreamCommand(BaseSimpleStreamCommand):
+    '''
+    Analyses all rows in passed files from the earliest to the oldest.
+    '''
     def init_options(self,*args,**kwargs):
         self.files = args
     def collect_streams(self):
@@ -458,6 +484,11 @@ class BaseFileStreamCommand(BaseSimpleStreamCommand):
             self.add_stream_reader(filename)
 
 class BaseStreamCommand(BaseSimpleStreamCommand):
+    '''
+    Analyses all rows in passed files from the earliest to the oldest.
+    But also uses SQLite index file so you can save last parsed position.
+    It is very useful to collect data from folder which is used for saving logs in the same time.
+    '''
 
     def get_stream_index(self):
         return S.STREAM_INDEX
@@ -516,13 +547,17 @@ class BaseStreamCommand(BaseSimpleStreamCommand):
 
 
 class BaseStreamBlockCommand(BaseStreamCommand):
+    '''
+        Uses stream and index to collect a block instead of a row.
+        So you analyse full request block from django-ucsvlog with request data,
+         response data and data inside it
+    '''
     def __init__(self,*args,**kwargs):
         super(BaseStreamBlockCommand,self).__init__(*args,**kwargs)
         self.a_rows = {}
         self.lost_rows = 0
     
     def collect_row(self,row):
-        #import ipdb; ipdb.set_trace();
         if row.parent_index:
             if row.parent_index in self.a_rows:
                 self.a_rows[row.parent_index].add_child(row)
@@ -548,11 +583,3 @@ class BaseStreamBlockCommand(BaseStreamCommand):
         for item in row.children:
             if item.is_a_log:
                 self.remove_children(item)
-                
-            
-        
-        
-        
-        
-        
-        
